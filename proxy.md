@@ -54,3 +54,5 @@ client : RETR 10MB_testcase
 传完一个文件之后socket没有关闭
 
 proxy_func后面加上close connfd
+
+设置为issue1
