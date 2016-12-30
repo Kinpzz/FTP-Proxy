@@ -174,6 +174,10 @@ int proxy_func(int ser_port, int clifd, int rate) {
                 }
                 if (byte_num < 50) printf("client : %s\n", buffer);
                 
+                /* in low speed to seperate the backet
+                    send the bucket you can send right now
+                    and sleep for a moment
+                */
                 pthread_mutex_lock(&proxy_token->mutex);
                 token_count = proxy_token->count;
                 while (token_count < byte_num) {
