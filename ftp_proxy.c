@@ -1,7 +1,7 @@
 /**
  * Simple FTP Proxy
  * Author: z58085111 @ HSNL
- * Author: kinpzz
+ * Author: kinpzz @ nthu,sysu
  * 2016/12
  * **/
 #include <sys/socket.h>
@@ -31,7 +31,7 @@ int proxy_IP[4];
 int connect_FTP(int ser_port, int clifd);
 int proxy_func(int ser_port, int clifd, int rate);
 int create_server(int port);
-void rate_control();
+//void rate_control();
 
 int main (int argc, char **argv) {
     int ctrlfd, connfd, port, rate;
@@ -46,7 +46,10 @@ int main (int argc, char **argv) {
     sscanf(argv[1], " %d.%d.%d.%d", &proxy_IP[0], &proxy_IP[1], &proxy_IP[2], &proxy_IP[3]);
     port = atoi(argv[2]);
     rate = atoi(argv[3]);
-
+    if (rate < 2) {
+        printf("[x] Min rate 2kb/s");
+        return -1;
+    }
     ctrlfd = create_server(port);
     clilen = sizeof(struct sockaddr_in);
     for (;;) {
@@ -139,7 +142,7 @@ int proxy_func(int ser_port, int clifd, int rate) {
     FD_SET(serfd, &allset);
     // tokens not to tell upload and download
     struct token *proxy_token = (struct token *)malloc(sizeof(struct token));
-    proxy_token->rate = rate*1024;//Kbytes TO bytes
+    proxy_token->rate = rate*1024;//Kbytes to bytes
     proxy_token->count = 0;
     // mutex closer to critical source
     pthread_mutex_init(&proxy_token->mutex,NULL);
@@ -150,11 +153,7 @@ int proxy_func(int ser_port, int clifd, int rate) {
     // thread token generator
     pthread_create(&ptid, &attr, token_generator, (void*)proxy_token);
     // char is 1 byte
-
-    //int token_per_time = 1;
-    double sleep_time;
-    int usleep_time;
-    int token_count;
+    int read_bytes = proxy_token->rate >= 102400 ? MAXSIZE : proxy_token->rate / 50;
     // selecting
     for (;;) {
         // reset select vars
@@ -168,33 +167,15 @@ int proxy_func(int ser_port, int clifd, int rate) {
             // upload
             if (FD_ISSET(clifd, &rset)) {
                 memset(buffer, '\0', MAXSIZE);
-                if ((byte_num = read(clifd, buffer, MAXSIZE)) <= 0) {
+                if ((byte_num = read(clifd, buffer, read_bytes)) <= 0) {
                     printf("[!] Client terminated the connection.\n");
                     break;
                 }
-                if (byte_num < 50) printf("client : %s\n", buffer);
+
+                //if (byte_num < 50) printf("client : %s\n", buffer);
                 
-                /* in low speed to seperate the backet
-                    send the bucket you can send right now
-                    and sleep for a moment
-                */
-                pthread_mutex_lock(&proxy_token->mutex);
-                token_count = proxy_token->count;
-                while (token_count < byte_num) {
-                    pthread_mutex_unlock(&proxy_token->mutex);
-                    //sleep_time = ((double)byte_num/proxy_token->rate);
-                    //usleep_time = (int)100000*(sleep_time);
-                    //usleep(usleep_time);
-                    pthread_mutex_lock(&proxy_token->mutex);
-                    token_count = proxy_token->count;
-                }
-                proxy_token->count = token_count - byte_num;
-                printf("consume %d tokens %d\n", proxy_token->count/1000,byte_num/1000);
-                pthread_mutex_unlock(&proxy_token->mutex);
-                
-                // write
-                if (write(serfd, buffer, byte_num) < 0) {
-                    printf("[x] Write to server failed.\n");
+                if (rate_control_write(proxy_token, serfd, buffer, byte_num) != 0) {
+                    printf("[x] Write fail server in rate controling write\n");
                     break;
                 }
             }
@@ -207,57 +188,47 @@ int proxy_func(int ser_port, int clifd, int rate) {
                     printf("[!] Server terminated the connection.\n");
                     break;
                 }
+                //if (status > 99) printf("server : %d %d\n", status, ser_port);
+                if(ser_port == FTP_PORT) {
+                    buffer[byte_num] = '\0';
+                    status = atoi(buffer);
+                    if (status == FTP_PASV_CODE) {
 
-                pthread_mutex_lock(&proxy_token->mutex);
-                token_count = proxy_token->count;
-                while (token_count < byte_num) {
-                    pthread_mutex_unlock(&proxy_token->mutex);
-                    //sleep_time = ((double)byte_num/proxy_token->rate);
-                    //usleep_time = (int)100000*(sleep_time);
-                    usleep(usleep_time);
-                    pthread_mutex_lock(&proxy_token->mutex);
-                    token_count = proxy_token->count;
-                }
-                proxy_token->count = token_count - byte_num;
-                printf("consume %d tokens %d\n", proxy_token->count/1000,byte_num/1000);
-                pthread_mutex_unlock(&proxy_token->mutex);
+                        sscanf(buffer, "%d Entering Passive Mode (%d,%d,%d,%d,%d,%d)",&pasv[0],&pasv[1],&pasv[2],&pasv[3],&pasv[4],&pasv[5],&pasv[6]);
+                        memset(buffer, '\0', MAXSIZE);
+                        // force data connection to proxy, set to issue1
+                        sprintf(buffer, "%d Entering Passive Mode (%d,%d,%d,%d,%d,%d)\n", status, proxy_IP[0], proxy_IP[1], proxy_IP[2], proxy_IP[3], pasv[5], pasv[6]);
 
+                        if ((childpid = fork()) == 0) {
+                            data_port = pasv[5] * 256 + pasv[6];
+                            datafd = create_server(data_port);
+                            if (write(clifd, buffer, byte_num) < 0) {
+                                printf("[x] Write to client failed.\n");
+                                break;
+                            }
+                            printf("[-] Waiting for data connection!\n");
+                            clilen = sizeof(struct sockaddr_in);
+                            connfd = accept(datafd, (struct sockaddr *)&cliaddr, &clilen);
+                            if (connfd < 0) {
+                                printf("[x] Accept failed\n");
+                                return 0;
+                            }
 
-                if(ser_port == FTP_PORT)
-                  buffer[byte_num] = '\0';
-                status = atoi(buffer);
-                if (status > 99) printf("server : %d %d\n", status, ser_port);
-                if (status == FTP_PASV_CODE && ser_port == FTP_PORT) {
-
-                    sscanf(buffer, "%d Entering Passive Mode (%d,%d,%d,%d,%d,%d)",&pasv[0],&pasv[1],&pasv[2],&pasv[3],&pasv[4],&pasv[5],&pasv[6]);
-                    memset(buffer, '\0', MAXSIZE);
-                    // force data connection to proxy, set to issue1
-                    sprintf(buffer, "%d Entering Passive Mode (%d,%d,%d,%d,%d,%d)\n", status, proxy_IP[0], proxy_IP[1], proxy_IP[2], proxy_IP[3], pasv[5], pasv[6]);
-
-                    if ((childpid = fork()) == 0) {
-                        data_port = pasv[5] * 256 + pasv[6];
-                        datafd = create_server(data_port);
+                            printf("[v] Data connection from: %s:%d connect.\n", inet_ntoa(cliaddr.sin_addr), htons(cliaddr.sin_port));
+                            proxy_func(data_port, connfd, rate);
+                            close(connfd);
+                            printf("[!] End of data connection!\n");
+                            exit(0);
+                        }
+                    } else {
                         if (write(clifd, buffer, byte_num) < 0) {
                             printf("[x] Write to client failed.\n");
                             break;
                         }
-                        printf("[-] Waiting for data connection!\n");
-                        clilen = sizeof(struct sockaddr_in);
-                        connfd = accept(datafd, (struct sockaddr *)&cliaddr, &clilen);
-                        if (connfd < 0) {
-                            printf("[x] Accept failed\n");
-                            return 0;
-                        }
-
-                        printf("[v] Data connection from: %s:%d connect.\n", inet_ntoa(cliaddr.sin_addr), htons(cliaddr.sin_port));
-                        proxy_func(data_port, connfd, rate);
-                        close(connfd);
-                        printf("[!] End of data connection!\n");
-                        exit(0);
                     }
-                } else {  // parent
-                    if (write(clifd, buffer, byte_num) < 0) {
-                        printf("[x] Write to client failed.\n");
+                } else {
+                    if (rate_control_write(proxy_token, clifd, buffer, byte_num) != 0) {
+                        printf("[x] Write client fail in rate controling write\n");
                         break;
                     }
                 }
@@ -272,7 +243,6 @@ int proxy_func(int ser_port, int clifd, int rate) {
     if (pthread_cancel(ptid) == 0) {
         pthread_mutex_destroy(&proxy_token->mutex);
         free(proxy_token);
-        //pthread_mutex_destroy(&proxy_token->mutex2);
     } else {
         printf("Cancle token_generator pthread fail\n");
     }
@@ -296,11 +266,4 @@ int create_server(int port) {
 
     listen(listenfd, 3);
     return listenfd;
-}
-
-void rate_control() {
-    /**
-     * Implement your main logic of rate control here.
-     * Add return variable or parameters you need.
-     * **/
 }

@@ -10,4 +10,4 @@ struct token {
 };
 
 void *token_generator(void *data);
-//void* token_consumer(void* data);
+int rate_control_write(struct token * proxy_token, int fd, char* buffer, int byte_num);
