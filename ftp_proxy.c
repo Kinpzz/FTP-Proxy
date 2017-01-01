@@ -144,6 +144,10 @@ int proxy_func(int ser_port, int clifd, int rate) {
     struct token *proxy_token = (struct token *)malloc(sizeof(struct token));
     proxy_token->rate = rate*1024;//Kbytes to bytes
     proxy_token->count = 0;
+    // to balance consume and generate token frequency
+    proxy_token->token_per_time = proxy_token->rate >= MAXSIZE*100 ? MAXSIZE : proxy_token->rate / 100;
+    proxy_token->t = ((double)(proxy_token->token_per_time)/proxy_token->rate);
+
     // mutex closer to critical source
     pthread_mutex_init(&proxy_token->mutex,NULL);
     // create a pthread to generate token
@@ -153,7 +157,15 @@ int proxy_func(int ser_port, int clifd, int rate) {
     // thread token generator
     pthread_create(&ptid, &attr, token_generator, (void*)proxy_token);
     // char is 1 byte
-    int read_bytes = proxy_token->rate >= 102400 ? MAXSIZE : proxy_token->rate / 50;
+    
+    // control window size to aviod to much flow in upload
+    // workable on unbuntu, unable to control on macOS 10.12
+    int setval =  proxy_token->rate;
+    setsockopt(clifd,SOL_SOCKET,SO_RCVBUF,(char *)&setval, sizeof(int));
+    setsockopt(clifd,SOL_SOCKET,SO_SNDBUF,(char *)&setval, sizeof(int));
+    setsockopt(serfd,SOL_SOCKET,SO_RCVBUF,(char *)&setval, sizeof(int));
+    setsockopt(serfd,SOL_SOCKET,SO_SNDBUF,(char *)&setval, sizeof(int));
+
     // selecting
     for (;;) {
         // reset select vars
@@ -167,13 +179,14 @@ int proxy_func(int ser_port, int clifd, int rate) {
             // upload
             if (FD_ISSET(clifd, &rset)) {
                 memset(buffer, '\0', MAXSIZE);
-                if ((byte_num = read(clifd, buffer, read_bytes)) <= 0) {
+                // read from TCP recv buffer 
+                if ((byte_num = read(clifd, buffer, proxy_token->token_per_time)) <= 0) {
                     printf("[!] Client terminated the connection.\n");
                     break;
                 }
-
                 //if (byte_num < 50) printf("client : %s\n", buffer);
                 
+                // blocking write to TCP send buffer
                 if (rate_control_write(proxy_token, serfd, buffer, byte_num) != 0) {
                     printf("[x] Write fail server in rate controling write\n");
                     break;
@@ -184,7 +197,7 @@ int proxy_func(int ser_port, int clifd, int rate) {
             // download
             if (FD_ISSET(serfd, &rset)) {
                 memset(buffer, '\0', MAXSIZE);
-                if ((byte_num = read(serfd, buffer, MAXSIZE)) <= 0) {
+                if ((byte_num = read(serfd, buffer, proxy_token->token_per_time)) <= 0) {
                     printf("[!] Server terminated the connection.\n");
                     break;
                 }
