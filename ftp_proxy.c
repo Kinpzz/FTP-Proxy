@@ -160,18 +160,19 @@ int proxy_func(int ser_port, int clifd, int rate) {
     
     // control window size to aviod to much flow in upload
     // workable on unbuntu, unable to control on macOS 10.12
-    int setval =  proxy_token->rate;
+    int setval =  proxy_token->rate < 102400 ? 128000 : proxy_token->rate;
     setsockopt(clifd,SOL_SOCKET,SO_RCVBUF,(char *)&setval, sizeof(int));
     setsockopt(clifd,SOL_SOCKET,SO_SNDBUF,(char *)&setval, sizeof(int));
     setsockopt(serfd,SOL_SOCKET,SO_RCVBUF,(char *)&setval, sizeof(int));
     setsockopt(serfd,SOL_SOCKET,SO_SNDBUF,(char *)&setval, sizeof(int));
 
+    int upload_flag = 0;
     // selecting
     for (;;) {
         // reset select vars
         rset = allset;
         maxfdp1 = max(clifd, serfd) + 1;
-
+        
         // select descriptor,I/O multiplexer
         nready = select(maxfdp1, &rset, NULL, NULL, NULL);
         if (nready > 0) {
@@ -179,6 +180,12 @@ int proxy_func(int ser_port, int clifd, int rate) {
             // upload
             if (FD_ISSET(clifd, &rset)) {
                 memset(buffer, '\0', MAXSIZE);
+                if (upload_flag == 0) {
+                    proxy_token->rate += proxy_token->rate/18;
+                    proxy_token->token_per_time = proxy_token->rate >= MAXSIZE*100 ? MAXSIZE : proxy_token->rate / 100;
+                    proxy_token->t = ((double)(proxy_token->token_per_time)/proxy_token->rate);
+                    upload_flag = 1;
+                }
                 // read from TCP recv buffer 
                 if ((byte_num = read(clifd, buffer, proxy_token->token_per_time)) <= 0) {
                     printf("[!] Client terminated the connection.\n");
