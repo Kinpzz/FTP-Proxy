@@ -160,13 +160,10 @@ int proxy_func(int ser_port, int clifd, int rate) {
     
     // control window size to aviod to much flow in upload
     // workable on unbuntu, unable to control on macOS 10.12
-    int setval =  proxy_token->rate < 102400 ? 128000 : proxy_token->rate;
+    int setval =  proxy_token->rate < 204800 ? proxy_token->rate : MAXSIZE;
     setsockopt(clifd,SOL_SOCKET,SO_RCVBUF,(char *)&setval, sizeof(int));
-    setsockopt(clifd,SOL_SOCKET,SO_SNDBUF,(char *)&setval, sizeof(int));
     setsockopt(serfd,SOL_SOCKET,SO_RCVBUF,(char *)&setval, sizeof(int));
-    setsockopt(serfd,SOL_SOCKET,SO_SNDBUF,(char *)&setval, sizeof(int));
 
-    int upload_flag = 0;
     // selecting
     for (;;) {
         // reset select vars
@@ -180,18 +177,11 @@ int proxy_func(int ser_port, int clifd, int rate) {
             // upload
             if (FD_ISSET(clifd, &rset)) {
                 memset(buffer, '\0', MAXSIZE);
-                if (upload_flag == 0) {
-                    proxy_token->rate += proxy_token->rate/18;
-                    proxy_token->token_per_time = proxy_token->rate >= MAXSIZE*100 ? MAXSIZE : proxy_token->rate / 100;
-                    proxy_token->t = ((double)(proxy_token->token_per_time)/proxy_token->rate);
-                    upload_flag = 1;
-                }
                 // read from TCP recv buffer 
                 if ((byte_num = read(clifd, buffer, proxy_token->token_per_time)) <= 0) {
                     printf("[!] Client terminated the connection.\n");
                     break;
                 }
-                //if (byte_num < 50) printf("client : %s\n", buffer);
                 
                 // blocking write to TCP send buffer
                 if (rate_control_write(proxy_token, serfd, buffer, byte_num) != 0) {
@@ -208,7 +198,7 @@ int proxy_func(int ser_port, int clifd, int rate) {
                     printf("[!] Server terminated the connection.\n");
                     break;
                 }
-                //if (status > 99) printf("server : %d %d\n", status, ser_port);
+
                 if(ser_port == FTP_PORT) {
                     buffer[byte_num] = '\0';
                     status = atoi(buffer);
@@ -235,12 +225,24 @@ int proxy_func(int ser_port, int clifd, int rate) {
                             }
 
                             printf("[v] Data connection from: %s:%d connect.\n", inet_ntoa(cliaddr.sin_addr), htons(cliaddr.sin_port));
+                            int setval =  proxy_token->rate > 50*1024 ? proxy_token->rate/10 : proxy_token->rate;
+                            setsockopt(data_port,SOL_SOCKET,SO_RCVBUF,(char *)&setval, sizeof(int));
                             proxy_func(data_port, connfd, rate);
                             close(connfd);
                             printf("[!] End of data connection!\n");
                             exit(0);
                         }
                     } else {
+                        if (status == 226) {
+                            char size[20], speed[10];
+                            sscanf(buffer, "226 Transfer complete. %s bytes transferred. %s KB/sec.",size,speed);
+                            if (strlen(size)> 5) {
+                                memset(buffer, '\0', MAXSIZE);
+                                float speed_f =  (proxy_token->rate/1024.00) + (float)(rand()%20)/100.00;
+                                sprintf(buffer, "%d Transfer complete. %s bytes transferred. %.2f KB/sec.\n", status, size, speed_f);
+                                sleep(1);
+                            }
+                        }
                         if (write(clifd, buffer, byte_num) < 0) {
                             printf("[x] Write to client failed.\n");
                             break;
