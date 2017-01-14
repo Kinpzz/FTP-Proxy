@@ -421,16 +421,3 @@ if (FD_ISSET(clifd, &rset)) {
 
 ![](https://ws2.sinaimg.cn/large/6177e8b1gw1fbqgdxyu0lj20vo03wtbf.jpg)
 
-## 贡献
-
-* 颜鹏翔 x1057057
-  * 写proposal，制作投影片
-  * 写report，使用github记录开发过程，进行demo
-  * 实现token bucket限速功能，写完代码
-  * 修复bug，解决一些特殊情况下的问题，改进框架
-  * 测试，根据测试结果修改代码
-
-![](https://ws4.sinaimg.cn/large/6177e8b1jw1fbqg552k25j21ka0u8ahj.jpg)
-
-* 朱占仕 x1052003
-  * 测试
