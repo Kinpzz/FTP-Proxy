@@ -1,0 +1,4 @@
+*.report
+*.o
+proxy
+makefile~
