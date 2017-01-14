@@ -113,6 +113,24 @@ int connect_FTP(int ser_port, int clifd) {
 
     return sockfd;
 }
+int create_server(int port) {
+    int listenfd;
+    struct sockaddr_in servaddr;
+
+    listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    bzero(&servaddr, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    servaddr.sin_port = htons(port);
+    if (bind(listenfd, (struct sockaddr *)&servaddr , sizeof(servaddr)) < 0) {
+        //print the error message
+        perror("bind failed. Error");
+        return -1;
+    }
+
+    listen(listenfd, 3);
+    return listenfd;
+}
 
 int proxy_func(int ser_port, int clifd, int rate) {
     char buffer[MAXSIZE];
@@ -225,8 +243,6 @@ int proxy_func(int ser_port, int clifd, int rate) {
                             }
 
                             printf("[v] Data connection from: %s:%d connect.\n", inet_ntoa(cliaddr.sin_addr), htons(cliaddr.sin_port));
-                            int setval =  proxy_token->rate > 50*1024 ? proxy_token->rate/10 : proxy_token->rate;
-                            setsockopt(data_port,SOL_SOCKET,SO_RCVBUF,(char *)&setval, sizeof(int));
                             proxy_func(data_port, connfd, rate);
                             close(connfd);
                             printf("[!] End of data connection!\n");
@@ -269,23 +285,4 @@ int proxy_func(int ser_port, int clifd, int rate) {
         printf("Cancle token_generator pthread fail\n");
     }
     return 0;
-}
-
-int create_server(int port) {
-    int listenfd;
-    struct sockaddr_in servaddr;
-
-    listenfd = socket(AF_INET, SOCK_STREAM, 0);
-    bzero(&servaddr, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    servaddr.sin_port = htons(port);
-    if (bind(listenfd, (struct sockaddr *)&servaddr , sizeof(servaddr)) < 0) {
-        //print the error message
-        perror("bind failed. Error");
-        return -1;
-    }
-
-    listen(listenfd, 3);
-    return listenfd;
 }
